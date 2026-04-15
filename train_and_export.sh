@@ -154,7 +154,7 @@ setup_environment() {
         # Install Python packages
         log_info "Installing Python packages..."
         pip3 install --upgrade pip
-        pip3 install unsloth transformers datasets huggingface_hub
+        pip3 install unsloth transformers datasets huggingface_hub tqdm
 
         # Install llama.cpp for export
         log_info "Installing llama.cpp for GGUF export..."

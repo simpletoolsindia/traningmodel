@@ -1940,6 +1940,8 @@ def generate_dataset(num_rows, output_file):
         for i in iterator:
             row = generate_row(i)
             writer.writerow(row)
+            if not has_tqdm and (i + 1) % 100000 == 0:
+                print(f"  Progress: {i + 1:,} / {num_rows:,} rows generated...")
 
     elapsed = time.time() - start_time
     rows_per_sec = num_rows / elapsed if elapsed > 0 else 0
