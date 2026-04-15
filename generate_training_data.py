@@ -1924,6 +1924,7 @@ def generate_dataset(num_rows, output_file):
     ]
 
     import time
+    import multiprocessing
     start_time = time.time()
 
     # Write CSV
@@ -1931,17 +1932,19 @@ def generate_dataset(num_rows, output_file):
         writer = csv.DictWriter(f, fieldnames=fieldnames, quoting=csv.QUOTE_ALL)
         writer.writeheader()
 
-        # Progress iterator
-        if has_tqdm:
-            iterator = tqdm(range(num_rows), desc="Generating", unit="rows", ncols=80)
-        else:
-            iterator = range(num_rows)
+        pool_size = multiprocessing.cpu_count()
+        print(f"  Using {pool_size} CPU cores for parallel generation...")
+        
+        with multiprocessing.Pool(processes=pool_size) as pool:
+            if has_tqdm:
+                iterator = tqdm(pool.imap(generate_row, range(num_rows), chunksize=2000), total=num_rows, desc="Generating", unit="rows", ncols=80)
+            else:
+                iterator = pool.imap(generate_row, range(num_rows), chunksize=2000)
 
-        for i in iterator:
-            row = generate_row(i)
-            writer.writerow(row)
-            if not has_tqdm and (i + 1) % 100000 == 0:
-                print(f"  Progress: {i + 1:,} / {num_rows:,} rows generated...")
+            for i, row in enumerate(iterator):
+                writer.writerow(row)
+                if not has_tqdm and (i + 1) % 100000 == 0:
+                    print(f"  Progress: {i + 1:,} / {num_rows:,} rows generated...")
 
     elapsed = time.time() - start_time
     rows_per_sec = num_rows / elapsed if elapsed > 0 else 0
