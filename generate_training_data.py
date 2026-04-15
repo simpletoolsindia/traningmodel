@@ -18,6 +18,7 @@ import csv
 import random
 import uuid
 import argparse
+import os
 from datetime import datetime, timedelta
 
 # ─────────────────────────────────────────────
@@ -1680,8 +1681,27 @@ Based on best practices, I recommend the following approach for {language} devel
 # MAIN DATA GENERATOR
 # ─────────────────────────────────────────────
 
+# ─────────────────────────────────────────────
+# PRECOMPUTED INDEX LISTS (set at generation time)
+# ─────────────────────────────────────────────
+_MESSAGE_TYPE_KEYS = list(MESSAGE_TYPES.keys())
+_MESSAGE_TYPE_WEIGHTS = list(MESSAGE_TYPES.values())
+_LANGUAGE_KEYS = list(LANGUAGES.keys())
+_LANGUAGE_WEIGHTS = list(LANGUAGES.values())
+_TASK_TYPE_KEYS = list(TASK_TYPES.keys())
+_TASK_TYPE_WEIGHTS = list(TASK_TYPES.values())
+_DIFFICULTY_KEYS = list(DIFFICULTIES.keys())
+_DIFFICULTY_WEIGHTS = list(DIFFICULTIES.values())
+_CATEGORY_KEYS = list(CATEGORIES.keys())
+_CATEGORY_WEIGHTS = list(CATEGORIES.values())
+_AGENT_ROLE_KEYS = list(AGENT_ROLES.keys())
+_ALL_TOOL_NAMES = list(ALL_STANDARD_TOOLS.keys())
+
+# Pre-built index -> choices maps (set by generate_dataset_gpu)
+_GPU_INDICES = None
+
 def generate_row(row_id):
-    """Generate a single training row."""
+    """Generate a single training row using Python random (CPU multiprocessing fallback)."""
     # 1. Select message type
     message_type = weighted_choice(MESSAGE_TYPES)
 
@@ -1901,14 +1921,183 @@ Would you like me to analyze any specific file in detail?"""
     }
 
 
+def generate_row_with_indices(args):
+    """
+    GPU-accelerated variant: receives pre-computed random indices from GPU batch RNG.
+    Replaces all weighted_choice() / random.choice() category calls with O(1) index lookups.
+    Only string assembly and remaining random selections happen on CPU workers.
+    """
+    (
+        row_id, msg_idx, lang_idx, task_idx, diff_idx,
+        cat_idx, role_idx, tone_idx, instr_idx, guard_idx, rules_idx, num_tools
+    ) = args
+
+    # Use GPU-precomputed indices for all categorical choices
+    message_type = _MESSAGE_TYPE_KEYS[msg_idx]
+    language     = _LANGUAGE_KEYS[lang_idx]
+    task_type    = _TASK_TYPE_KEYS[task_idx]
+    difficulty   = _DIFFICULTY_KEYS[diff_idx]
+    category     = _CATEGORY_KEYS[cat_idx]
+    agent_role   = _AGENT_ROLE_KEYS[role_idx]
+    capabilities = AGENT_ROLES[agent_role]
+    bot_tone     = BOT_TONES[tone_idx]
+    instruction  = AGENT_INSTRUCTIONS[instr_idx]
+    guardrails   = GUARDRAIL_SETS[guard_idx]
+    strict_rules = STRICT_RULES_SETS[rules_idx]
+
+    framework = get_framework_for_language(language)
+    tools     = pick_n(_ALL_TOOL_NAMES, num_tools)
+    memory    = generate_memory(language, framework)
+    conversation_history = generate_conversation_history(language, task_type)
+
+    user_message = ""
+    response = {}
+
+    if message_type == "normal":
+        response_category = random.choice(list(RESPONSE_TASKS.keys()))
+        user_message = random.choice(RESPONSE_TASKS[response_category])
+        response = build_response_response(user_message, language, difficulty, framework, category)
+
+    elif message_type == "tool_call":
+        tool_name = random.choice(_ALL_TOOL_NAMES)
+        tool_messages = TOOL_TASKS.get(tool_name, ["Perform the operation"])
+        user_message = random.choice(tool_messages) if tool_messages else f"Use {tool_name}"
+        tool_args = generate_tool_args(tool_name, language)
+        response = build_tool_call_response(tool_name, tool_args, language, framework, difficulty, category)
+
+    elif message_type == "mcp_call":
+        tool_name = random.choice(list(MCP_TOOLS.keys()))
+        tool_messages = TOOL_TASKS.get(tool_name, ["Search for information"])
+        user_message = random.choice(tool_messages) if tool_messages else f"Use MCP to {tool_name.replace('_', ' ')}"
+        tool_args = generate_mcp_args(tool_name, language)
+        response = build_mcp_call_response(tool_name, tool_args, language, framework, difficulty, category)
+
+    else:  # multi_turn
+        num_turns = random.choices([2, 3, 4], weights=[0.3, 0.5, 0.2])[0]
+        user_message = get_task_for_language(language, difficulty)
+        turns = []
+        t_name = random.choice(_ALL_TOOL_NAMES)
+        t_args = generate_tool_args(t_name, language)
+        turns.append({"turn_id": 1, "type": "tool_call", "tool_call": {"id": generate_call_id(), "name": t_name, "arguments": t_args}})
+        if t_name in GIT_TOOLS:         rc = "[Git operation completed successfully]"
+        elif t_name in DATETIME_TOOLS:  rc = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        elif t_name in SYSTEM_TOOLS:    rc = "[System command output]"
+        elif t_name in WEB_TOOLS:       rc = "[Web search results]"
+        else:                           rc = "[File operation completed]"
+        turns.append({"turn_id": 2, "type": "tool_response", "content": rc})
+        assistant_content = f"Based on the results:\n- Operation completed for {language}\n- Review and run tests to verify."
+        turns.append({"turn_id": 3, "type": "assistant", "content": assistant_content, "humanize": False})
+        for i in range(4, num_turns + 1):
+            turns.append({"turn_id": i, "type": "assistant", "content": f"Continuing (turn {i})", "humanize": False})
+        response = build_multi_turn_response(turns, language, framework, difficulty, category)
+
+    prompt = build_prompt(
+        agent_role=agent_role, capabilities=capabilities, bot_tone=bot_tone,
+        language="en", instruction=instruction, guardrails=guardrails,
+        strict_rules=strict_rules, tools=tools, memory=memory,
+        conversation_history=conversation_history, user_message=user_message,
+    )
+
+    output_json   = json.dumps(response, ensure_ascii=False)
+    tool_call_d   = response.get("tool_call")
+    mcp_call_d    = response.get("mcp_call")
+    t_name_out    = (tool_call_d or mcp_call_d or {}).get("name", "") if (tool_call_d or mcp_call_d) else ""
+    t_provider    = "standard" if tool_call_d else ("mcp" if mcp_call_d else "none")
+    t_args_out    = json.dumps((tool_call_d or mcp_call_d or {}).get("arguments", {}))
+    mcp_server    = mcp_call_d.get("server") if mcp_call_d else None
+    content       = response.get("content") or ""
+    turns_json    = json.dumps(response.get("turns")) if response.get("turns") else ""
+    metadata      = json.dumps({
+        "source": "synthetic", "generated_by": "dataset-generator-v4-gpu",
+        "generated_at": datetime.now().isoformat(), "version": "4.0",
+        "difficulty_score": {"easy": 1, "medium": 2, "hard": 3}[difficulty], "task_type": task_type,
+    })
+    return {
+        "id": str(uuid.uuid4()), "prompt": prompt, "language": language,
+        "framework": framework, "task_type": task_type, "message_type": message_type,
+        "tools_available": json.dumps(tools), "output_json": output_json,
+        "content": content, "tool_name": t_name_out, "tool_provider": t_provider,
+        "tool_args": t_args_out, "mcp_server": mcp_server or "", "turns": turns_json,
+        "humanize": str(response.get("humanize", False)).lower(), "category": category,
+        "difficulty": difficulty, "agent_role": agent_role,
+        "guardrails": json.dumps(guardrails), "strict_rules": json.dumps(strict_rules),
+        "metadata": metadata,
+    }
+
+
 def generate_dataset(num_rows, output_file):
-    """Generate the full dataset and write to CSV with progress bar."""
+    """Generate the full dataset using GPU-accelerated RNG + CPU multiprocessing."""
+    import time
+    import multiprocessing
+
     print(f"Generating {num_rows:,} training rows...")
     print(f"Output: {output_file}")
     print(f"Estimated size: ~{num_rows * 3 // 1000}MB")
     print()
 
-    # Try to import tqdm for progress bar
+    # ── GPU: batch pre-generate ALL random indices at once ─────────────────
+    use_gpu = False
+    try:
+        import torch
+        if torch.cuda.is_available():
+            use_gpu = True
+            device = torch.device("cuda")
+            gpu_name = torch.cuda.get_device_name(0)
+            print(f"  [GPU] Using {gpu_name} for batch random index generation")
+
+            n = num_rows
+            # Sample all categorical indices on GPU in one shot
+            msg_probs   = torch.tensor(_MESSAGE_TYPE_WEIGHTS, device=device)
+            lang_probs  = torch.tensor(_LANGUAGE_WEIGHTS, device=device)
+            task_probs  = torch.tensor(_TASK_TYPE_WEIGHTS, device=device)
+            diff_probs  = torch.tensor(_DIFFICULTY_WEIGHTS, device=device)
+            cat_probs   = torch.tensor(_CATEGORY_WEIGHTS, device=device)
+
+            gpu_indices = {
+                "message_type": torch.multinomial(msg_probs.expand(n, -1),  1, replacement=True).squeeze(1).cpu().tolist(),
+                "language":     torch.multinomial(lang_probs.expand(n, -1), 1, replacement=True).squeeze(1).cpu().tolist(),
+                "task_type":    torch.multinomial(task_probs.expand(n, -1), 1, replacement=True).squeeze(1).cpu().tolist(),
+                "difficulty":   torch.multinomial(diff_probs.expand(n, -1), 1, replacement=True).squeeze(1).cpu().tolist(),
+                "category":     torch.multinomial(cat_probs.expand(n, -1),  1, replacement=True).squeeze(1).cpu().tolist(),
+                "agent_role":   torch.randint(0, len(_AGENT_ROLE_KEYS),  (n,)).tolist(),
+                "bot_tone":     torch.randint(0, len(BOT_TONES),         (n,)).tolist(),
+                "instruction":  torch.randint(0, len(AGENT_INSTRUCTIONS),(n,)).tolist(),
+                "guardrails":   torch.randint(0, len(GUARDRAIL_SETS),   (n,)).tolist(),
+                "strict_rules": torch.randint(0, len(STRICT_RULES_SETS),(n,)).tolist(),
+                "num_tools":    (torch.randint(0, 6, (n,)) + 5).tolist(),  # 5-10
+            }
+            # Free GPU memory immediately after
+            del msg_probs, lang_probs, task_probs, diff_probs, cat_probs
+            torch.cuda.empty_cache()
+            print(f"  [GPU] Pre-generated {n:,} random index sets — GPU memory freed")
+        else:
+            print("  [CPU] CUDA not available, falling back to CPU multiprocessing")
+    except ImportError:
+        print("  [CPU] torch not found, falling back to CPU multiprocessing")
+
+    # ── Prepare args for workers ────────────────────────────────────────────
+    if use_gpu:
+        args = [
+            (
+                i,
+                gpu_indices["message_type"][i],
+                gpu_indices["language"][i],
+                gpu_indices["task_type"][i],
+                gpu_indices["difficulty"][i],
+                gpu_indices["category"][i],
+                gpu_indices["agent_role"][i],
+                gpu_indices["bot_tone"][i],
+                gpu_indices["instruction"][i],
+                gpu_indices["guardrails"][i],
+                gpu_indices["strict_rules"][i],
+                gpu_indices["num_tools"][i],
+            )
+            for i in range(num_rows)
+        ]
+    else:
+        args = list(range(num_rows))
+
+    # ── Try tqdm ────────────────────────────────────────────────────────────
     try:
         from tqdm import tqdm
         has_tqdm = True
@@ -1923,32 +2112,31 @@ def generate_dataset(num_rows, output_file):
         "difficulty", "agent_role", "guardrails", "strict_rules", "metadata",
     ]
 
-    import time
-    import multiprocessing
     start_time = time.time()
+    pool_size = multiprocessing.cpu_count()
+    worker_fn = generate_row_with_indices if use_gpu else generate_row
+    print(f"  Using {pool_size} CPU cores for parallel CSV assembly & writing...")
 
-    # Write CSV
     with open(output_file, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames, quoting=csv.QUOTE_ALL)
         writer.writeheader()
 
-        pool_size = multiprocessing.cpu_count()
-        print(f"  Using {pool_size} CPU cores for parallel generation...")
-        
         with multiprocessing.Pool(processes=pool_size) as pool:
             if has_tqdm:
-                iterator = tqdm(pool.imap(generate_row, range(num_rows), chunksize=2000), total=num_rows, desc="Generating", unit="rows", ncols=80)
+                iterator = tqdm(
+                    pool.imap(worker_fn, args, chunksize=2000),
+                    total=num_rows, desc="Writing CSV", unit="rows", ncols=80
+                )
             else:
-                iterator = pool.imap(generate_row, range(num_rows), chunksize=2000)
+                iterator = pool.imap(worker_fn, args, chunksize=2000)
 
             for i, row in enumerate(iterator):
                 writer.writerow(row)
                 if not has_tqdm and (i + 1) % 100000 == 0:
-                    print(f"  Progress: {i + 1:,} / {num_rows:,} rows generated...")
+                    print(f"  Progress: {i + 1:,} / {num_rows:,} rows written...")
 
     elapsed = time.time() - start_time
     rows_per_sec = num_rows / elapsed if elapsed > 0 else 0
-
     print()
     print(f"  " + "="*58)
     print(f"  [COMPLETE] Generated: {num_rows:,} rows in {elapsed:.1f}s ({rows_per_sec:,.0f} rows/sec)")
