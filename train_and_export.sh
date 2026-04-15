@@ -138,25 +138,33 @@ setup_environment() {
     # Create output directory
     mkdir -p "$OUTPUT_DIR"
 
-    # Check if running in Docker
-    if [ -f /.dockerenv ]; then
-        log_info "Running inside Docker container"
-    else
-        log_info "Running on bare metal"
+    # -------------------------------------------------------
+    # Always install Python packages (RunPod = Docker = skip bug fix)
+    # -------------------------------------------------------
+    log_info "Installing Python packages..."
+    pip install --upgrade pip --quiet
 
-        # Install system dependencies
-        log_info "Installing system dependencies..."
+    # Install unsloth only if missing (saves time on re-runs)
+    if python -c "import unsloth" 2>/dev/null; then
+        log_info "unsloth already installed, skipping..."
+    else
+        log_info "Installing unsloth (trying CUDA 12.4 first, fallback to generic)..."
+        pip install "unsloth[cu124-torch260] @ git+https://github.com/unslothai/unsloth.git" 2>/dev/null || \
+        pip install "unsloth[cu121-torch240] @ git+https://github.com/unslothai/unsloth.git" 2>/dev/null || \
+        pip install "unsloth @ git+https://github.com/unslothai/unsloth.git"
+    fi
+
+    pip install transformers datasets huggingface_hub tqdm --quiet
+
+    # Install system deps only on bare metal (not needed in RunPod Docker images)
+    if [ ! -f /.dockerenv ]; then
+        log_info "Running on bare metal - installing system dependencies..."
         if command -v apt-get &> /dev/null; then
-            sudo apt-get update
+            sudo apt-get update -qq
             sudo apt-get install -y build-essential cmake libcurl4-openssl-dev git
         fi
 
-        # Install Python packages
-        log_info "Installing Python packages..."
-        pip install --upgrade pip
-        pip install "unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git" transformers datasets huggingface_hub tqdm
-
-        # Install llama.cpp for export
+        # Install llama.cpp for GGUF export
         log_info "Installing llama.cpp for GGUF export..."
         if [ ! -d "./llama.cpp" ]; then
             git clone https://github.com/ggml-org/llama.cpp.git
@@ -165,6 +173,8 @@ setup_environment() {
             cmake --build build --config Release -j
             cd ..
         fi
+    else
+        log_info "Running inside Docker/RunPod - system deps already available"
     fi
 
     log_success "Environment setup complete"
