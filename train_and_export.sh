@@ -111,17 +111,17 @@ check_dependencies() {
     log_info "Checking dependencies..."
 
     # Check Python
-    if ! command -v python3 &> /dev/null; then
-        log_error "Python 3 not found. Please install Python 3.10+"
+    if ! command -v python &> /dev/null; then
+        log_error "Python not found. Please install Python 3.10+"
         exit 1
     fi
 
-    PYTHON_VERSION=$(python3 --version | cut -d' ' -f2 | cut -d'.' -f1,2)
+    PYTHON_VERSION=$(python --version | cut -d' ' -f2 | cut -d'.' -f1,2)
     log_info "Python version: $PYTHON_VERSION"
 
     # Check pip
-    if ! command -v pip3 &> /dev/null; then
-        log_error "pip3 not found"
+    if ! command -v pip &> /dev/null; then
+        log_error "pip not found"
         exit 1
     fi
 
@@ -153,8 +153,8 @@ setup_environment() {
 
         # Install Python packages
         log_info "Installing Python packages..."
-        pip3 install --upgrade pip
-        pip3 install unsloth transformers datasets huggingface_hub tqdm
+        pip install --upgrade pip
+        pip install "unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git" transformers datasets huggingface_hub tqdm
 
         # Install llama.cpp for export
         log_info "Installing llama.cpp for GGUF export..."
@@ -188,7 +188,7 @@ generate_dataset() {
     fi
 
     # Generate dataset using Python
-    python3 << 'PYTHON_SCRIPT'
+    python << 'PYTHON_SCRIPT'
 import sys
 sys.path.insert(0, '.')
 
@@ -277,7 +277,7 @@ train_model() {
     fi
 
     # Run training with best practices
-    python3 << 'PYTHON_SCRIPT'
+    python << 'PYTHON_SCRIPT'
 import os
 import sys
 import json
@@ -493,7 +493,7 @@ export_to_gguf() {
     GGUF_OUTPUT="$OUTPUT_DIR/$GGUF_QUANTIZATION"
     mkdir -p "$GGUF_OUTPUT"
 
-    python3 << 'PYTHON_SCRIPT'
+    python << 'PYTHON_SCRIPT'
 import os
 import torch
 from unsloth import FastLanguageModel
@@ -555,7 +555,7 @@ export_to_gguf_manual() {
     log_info "Running manual GGUF export..."
 
     # Step 1: Merge adapters
-    python3 << 'PYTHON_SCRIPT'
+    python << 'PYTHON_SCRIPT'
 import os
 from unsloth import FastLanguageModel
 from transformers import AutoTokenizer
@@ -581,7 +581,7 @@ PYTHON_SCRIPT
 
     # Step 2: Convert to GGUF
     if [ -d "./llama.cpp" ]; then
-        python3 llama.cpp/convert_hf_to_gguf.py merged_model \
+        python llama.cpp/convert_hf_to_gguf.py merged_model \
             --outfile "$OUTPUT_DIR/model-F16.gguf" \
             --outtype f16 \
             --split-max-size 50G
