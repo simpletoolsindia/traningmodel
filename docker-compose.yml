@@ -1,0 +1,56 @@
+version: '3.8'
+
+services:
+  # Training Service
+  train:
+    build: .
+    image: gemma4-cli-agent:latest
+    container_name: gemma4-training
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - CUDA_VISIBLE_DEVICES=0
+    volumes:
+      - ./data:/workspace/data
+      - ./output:/workspace/output
+      - ./training_data.csv:/workspace/training_data.csv
+    working_dir: /workspace
+    command: |
+      bash -c "python finetune.py \
+        --dataset /workspace/data/training_data.csv \
+        --output-dir /workspace/output/model \
+        --epochs 3 \
+        --batch-size 4"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  # Export Service (run after training)
+  export:
+    build: .
+    image: gemma4-cli-agent:latest
+    container_name: gemma4-export
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+    volumes:
+      - ./output:/workspace/output
+    working_dir: /workspace
+    command: |
+      bash -c "python export_to_gguf.py \
+        --model /workspace/output/model \
+        --output-dir /workspace/output/export \
+        --quant q4_k_m"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    profiles:
+      - export
