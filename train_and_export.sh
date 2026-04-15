@@ -110,17 +110,24 @@ check_gpu() {
 check_dependencies() {
     log_info "Checking dependencies..."
 
-    # Check Python
-    if ! command -v python &> /dev/null; then
+    # Detect python (try python3 first, then python)
+    if command -v python3 &> /dev/null; then
+        PYTHON="python3"
+        PIP="pip3"
+    elif command -v python &> /dev/null; then
+        PYTHON="python"
+        PIP="pip"
+    else
         log_error "Python not found. Please install Python 3.10+"
         exit 1
     fi
+    export PYTHON PIP
 
-    PYTHON_VERSION=$(python --version | cut -d' ' -f2 | cut -d'.' -f1,2)
-    log_info "Python version: $PYTHON_VERSION"
+    PYTHON_VERSION=$($PYTHON --version | cut -d' ' -f2 | cut -d'.' -f1,2)
+    log_info "Python version: $PYTHON_VERSION (using $PYTHON)"
 
     # Check pip
-    if ! command -v pip &> /dev/null; then
+    if ! command -v $PIP &> /dev/null; then
         log_error "pip not found"
         exit 1
     fi
@@ -140,19 +147,19 @@ setup_environment() {
 
     # Install Python packages
     log_info "Installing Python packages..."
-    pip install --upgrade pip --quiet
+    $PIP install --upgrade pip --quiet
 
     # Install unsloth only if missing (saves time on re-runs)
-    if python -c "import unsloth" 2>/dev/null; then
+    if $PYTHON -c "import unsloth" 2>/dev/null; then
         log_info "unsloth already installed, skipping..."
     else
         log_info "Installing unsloth (trying CUDA 12.4 first, fallback to generic)..."
-        pip install "unsloth[cu124-torch260] @ git+https://github.com/unslothai/unsloth.git" 2>/dev/null || \
-        pip install "unsloth[cu121-torch240] @ git+https://github.com/unslothai/unsloth.git" 2>/dev/null || \
-        pip install "unsloth @ git+https://github.com/unslothai/unsloth.git"
+        $PIP install "unsloth[cu124-torch260] @ git+https://github.com/unslothai/unsloth.git" 2>/dev/null || \
+        $PIP install "unsloth[cu121-torch240] @ git+https://github.com/unslothai/unsloth.git" 2>/dev/null || \
+        $PIP install "unsloth @ git+https://github.com/unslothai/unsloth.git"
     fi
 
-    pip install transformers datasets huggingface_hub tqdm --quiet
+    $PIP install transformers datasets huggingface_hub tqdm --quiet
 
     log_success "Environment setup complete"
 }
@@ -264,7 +271,7 @@ train_model() {
     fi
 
     # Run training with best practices
-    python << 'PYTHON_SCRIPT'
+    $PYTHON << 'PYTHON_SCRIPT'
 import os
 import sys
 import json
@@ -480,7 +487,7 @@ export_to_gguf() {
     GGUF_OUTPUT="$OUTPUT_DIR/$GGUF_QUANTIZATION"
     mkdir -p "$GGUF_OUTPUT"
 
-    python << 'PYTHON_SCRIPT'
+    $PYTHON << 'PYTHON_SCRIPT'
 import os
 import torch
 from unsloth import FastLanguageModel
@@ -542,7 +549,7 @@ export_to_gguf_manual() {
     log_info "Running manual GGUF export..."
 
     # Step 1: Merge adapters
-    python << 'PYTHON_SCRIPT'
+    $PYTHON << 'PYTHON_SCRIPT'
 import os
 from unsloth import FastLanguageModel
 from transformers import AutoTokenizer

@@ -25,15 +25,9 @@ import os
 import sys
 import json
 import argparse
-import torch
 import csv
 from datetime import datetime
 from pathlib import Path
-
-# Unsloth imports
-from unsloth import FastLanguageModel
-from transformers import TrainingArguments, DataCollatorForSeq2Seq
-from trl import SFTTrainer
 
 
 class CSVDataset:
@@ -385,6 +379,12 @@ def get_training_config(args):
 
 def main():
     """Main training function."""
+    # GPU-specific imports (only needed at runtime on CUDA machine)
+    import torch
+    from unsloth import FastLanguageModel
+    from transformers import TrainingArguments
+    from trl import SFTTrainer
+
     args = parse_args()
 
     print("\n" + "="*70)
@@ -408,9 +408,8 @@ def main():
 
     gpu_name = torch.cuda.get_device_name(0)
     gpu_memory = torch.cuda.get_device_properties(0).total_memory / (1024**3)
-    gpu_memory_free = torch.cuda.get_device_properties(0).total_mem / (1024**3)
     print(f"GPU: {gpu_name}")
-    print(f"GPU Memory: {gpu_memory_free:.1f} GB")
+    print(f"GPU Memory: {gpu_memory:.1f} GB")
     print()
 
     # Load dataset
