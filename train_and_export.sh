@@ -726,11 +726,13 @@ OPERATION="${1:-all}"
 case "$OPERATION" in
     --generate-dataset)
         check_dependencies
+        setup_environment
         generate_dataset
         ;;
     --train)
         check_dependencies
         check_gpu
+        setup_environment
         train_model
         ;;
     --export)
@@ -741,6 +743,7 @@ case "$OPERATION" in
     --all)
         check_dependencies
         check_gpu
+        setup_environment
         generate_dataset
         train_model
         export_to_gguf
