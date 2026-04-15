@@ -541,7 +541,7 @@ from unsloth import FastLanguageModel
 import torch
 
 # Model
-model_name = "unsloth/gemma-4-E4B-better-fitting-v2"
+model_name = "unsloth/gemma-4-E4B-it"
 
 # Quantization & LoRA
 max_seq_length = 2048

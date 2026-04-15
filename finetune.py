@@ -109,7 +109,7 @@ def parse_args():
     parser.add_argument(
         "--model",
         type=str,
-        default="unsloth/gemma-4-E4B-better-fitting-v2",
+        default="unsloth/gemma-4-E4B-it",
         help="Model to fine-tune"
     )
 

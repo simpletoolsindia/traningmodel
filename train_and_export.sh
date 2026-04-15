@@ -31,7 +31,7 @@ NC='\033[0m' # No Color
 # =============================================================================
 
 # Model to fine-tune
-MODEL_NAME="unsloth/gemma-4-E4B-better-fitting-v2"
+MODEL_NAME="unsloth/gemma-4-E4B-it"
 # Alternative: MODEL_NAME="unsloth/gemma-4-26B-better-fitting-v2"
 
 # ========== TRAINING PARAMETERS (Best Practices) ==========
@@ -308,7 +308,7 @@ from transformers import TrainingArguments
 from trl import SFTTrainer
 
 # Best Practice Configuration
-MODEL_NAME = "unsloth/gemma-4-E4B-better-fitting-v2"
+MODEL_NAME = "unsloth/gemma-4-E4B-it"
 OUTPUT_DIR = "./gemma4-coding-agent"
 NUM_EPOCHS = 3
 LEARNING_RATE = 2e-4
@@ -521,7 +521,7 @@ from transformers import AutoTokenizer
 
 # Configuration
 OUTPUT_DIR = "./gemma4-coding-agent"
-MODEL_NAME = "unsloth/gemma-4-E4B-better-fitting-v2"
+MODEL_NAME = "unsloth/gemma-4-E4B-it"
 QUANTIZATION = "q4_k_m"  # Options: q4_k_m, q8_0, f16, q5_k_m
 
 print(f"Loading fine-tuned model from {OUTPUT_DIR}...")
