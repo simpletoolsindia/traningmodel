@@ -138,9 +138,7 @@ setup_environment() {
     # Create output directory
     mkdir -p "$OUTPUT_DIR"
 
-    # -------------------------------------------------------
-    # Always install Python packages (RunPod = Docker = skip bug fix)
-    # -------------------------------------------------------
+    # Install Python packages
     log_info "Installing Python packages..."
     pip install --upgrade pip --quiet
 
@@ -155,27 +153,6 @@ setup_environment() {
     fi
 
     pip install transformers datasets huggingface_hub tqdm --quiet
-
-    # Install system deps only on bare metal (not needed in RunPod Docker images)
-    if [ ! -f /.dockerenv ]; then
-        log_info "Running on bare metal - installing system dependencies..."
-        if command -v apt-get &> /dev/null; then
-            sudo apt-get update -qq
-            sudo apt-get install -y build-essential cmake libcurl4-openssl-dev git
-        fi
-
-        # Install llama.cpp for GGUF export
-        log_info "Installing llama.cpp for GGUF export..."
-        if [ ! -d "./llama.cpp" ]; then
-            git clone https://github.com/ggml-org/llama.cpp.git
-            cd llama.cpp
-            cmake .. -B build -DBUILD_SHARED_LIBS=OFF -DGGML_CUDA=ON -DLLAMA_CURL=ON
-            cmake --build build --config Release -j
-            cd ..
-        fi
-    else
-        log_info "Running inside Docker/RunPod - system deps already available"
-    fi
 
     log_success "Environment setup complete"
 }
