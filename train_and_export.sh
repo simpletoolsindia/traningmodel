@@ -145,21 +145,47 @@ setup_environment() {
     # Create output directory
     mkdir -p "$OUTPUT_DIR"
 
-    # Install Python packages
-    log_info "Installing Python packages..."
+    log_info "Installing Python packages with pinned versions (fixes torchao/torch conflicts)..."
     $PIP install --upgrade pip --quiet
 
-    # Install unsloth only if missing (saves time on re-runs)
+    # Step 1: Detect CUDA version and upgrade PyTorch to 2.6 (required for torchao compatibility)
+    CUDA_VER=$($PYTHON -c "import subprocess; r=subprocess.run(['nvcc','--version'],capture_output=True,text=True); print('cu121') if '12.1' in r.stdout else print('cu124')" 2>/dev/null || echo "cu124")
+    log_info "Detected CUDA variant: $CUDA_VER"
+
+    log_info "Upgrading PyTorch to 2.6+ for torchao compatibility..."
+    $PIP install --upgrade "torch==2.6.0" torchvision torchaudio \
+        --index-url "https://download.pytorch.org/whl/${CUDA_VER}" --quiet
+
+    # Step 2: Pin torchao to version compatible with torch 2.6
+    log_info "Installing torchao (pinned)..."
+    $PIP install "torchao==0.9.0" --quiet 2>/dev/null || \
+    $PIP install "torchao==0.8.0" --quiet 2>/dev/null || \
+    log_warning "torchao pin failed - will use whatever unsloth installs"
+
+    # Step 3: Pin transformers to a version that works cleanly with unsloth + Gemma 4
+    log_info "Installing transformers (pinned for compatibility)..."
+    $PIP install "transformers==4.51.3" --quiet
+
+    # Step 4: Install unsloth
     if $PYTHON -c "import unsloth" 2>/dev/null; then
         log_info "unsloth already installed, skipping..."
     else
-        log_info "Installing unsloth (trying CUDA 12.4 first, fallback to generic)..."
-        $PIP install "unsloth[cu124-torch260] @ git+https://github.com/unslothai/unsloth.git" 2>/dev/null || \
-        $PIP install "unsloth[cu121-torch240] @ git+https://github.com/unslothai/unsloth.git" 2>/dev/null || \
+        log_info "Installing unsloth for Gemma 4..."
+        $PIP install "unsloth[${CUDA_VER}-torch260] @ git+https://github.com/unslothai/unsloth.git" 2>/dev/null || \
         $PIP install "unsloth @ git+https://github.com/unslothai/unsloth.git"
     fi
 
-    $PIP install transformers datasets huggingface_hub tqdm --quiet
+    # Step 5: Remaining deps
+    $PIP install datasets huggingface_hub tqdm --quiet
+
+    # Verify key imports
+    log_info "Verifying imports..."
+    if $PYTHON -c "import torch; import unsloth; print(f'  torch={torch.__version__}  unsloth OK')" 2>/dev/null; then
+        log_success "All packages verified OK"
+    else
+        log_error "Package verification failed - check errors above"
+        exit 1
+    fi
 
     log_success "Environment setup complete"
 }
