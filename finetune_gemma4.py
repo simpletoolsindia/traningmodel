@@ -4,18 +4,17 @@ Fine-tune Gemma 4 E4B — YOUR Custom Format
 ==========================================
 Train using YOUR custom XML prompt + JSON tool call response format.
 
-Dataset: training_data.csv (from generate_gemma_dataset.py)
+Dataset: training_data.jsonl (from generate_gemma_dataset.py)
 Input:   <init>...<User:>task</User:>
 Output:  {"message_type": "tool_call", "tool_call": {...}}
 
 Usage:
-    python finetune_gemma4.py --dataset training_data.csv --epochs 3
+    python finetune_gemma4.py --dataset training_data.jsonl --epochs 3
 """
 
 import os
 import sys
 import json
-import csv
 import argparse
 from datetime import datetime
 from pathlib import Path
@@ -24,7 +23,7 @@ from pathlib import Path
 def parse_args():
     p = argparse.ArgumentParser(description="Fine-tune Gemma 4 — Your Custom Format")
     p.add_argument("--model", default="unsloth/gemma-4-E4B-it")
-    p.add_argument("--dataset", default="training_data.csv")
+    p.add_argument("--dataset", default="training_data.jsonl")
     p.add_argument("--epochs", type=int, default=3)
     p.add_argument("--batch-size", type=int, default=4)
     p.add_argument("--gradient-accumulation", type=int, default=4)
@@ -33,40 +32,35 @@ def parse_args():
     p.add_argument("--lora-rank", type=int, default=32)
     p.add_argument("--lora-alpha", type=int, default=64)
     p.add_argument("--output-dir", default="./gemma4-custom-agent")
+    p.add_argument("--max-samples", type=int, default=None,
+                    help="Limit dataset size for quick testing")
     return p.parse_args()
 
 
-class CSVDataset:
-    """Load YOUR custom format CSV dataset."""
+def load_jsonl_dataset(path, max_samples=None):
+    """Load YOUR custom format JSONL dataset."""
+    data = []
+    print(f"Loading YOUR custom format dataset: {path}")
 
-    def __init__(self, path, max_samples=None):
-        self.data = []
-        print(f"Loading YOUR custom format dataset: {path}")
+    with open(path, "r", encoding="utf-8") as f:
+        for i, line in enumerate(f):
+            if max_samples and i >= max_samples:
+                break
+            row = json.loads(line)
+            if "text" in row:
+                data.append(row)
 
-        with open(path, "r", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-            for i, row in enumerate(reader):
-                if max_samples and i >= max_samples:
-                    break
-
-                prompt = row.get("prompt", "")
-                output = row.get("output_json", "")
-
-                if prompt and output:
-                    # YOUR format: prompt + output as single text
-                    self.data.append({
-                        "text": f"{prompt}\n\n{output}"
-                    })
-
-        print(f"  Loaded {len(self.data):,} examples")
-        avg = sum(len(d["text"]) for d in self.data) / len(self.data) if self.data else 0
+    print(f"  Loaded {len(data):,} examples")
+    if data:
+        avg = sum(len(d["text"]) for d in data) / len(data)
         print(f"  Avg length: ~{avg:.0f} chars (~{int(avg * 0.25)} tokens)")
 
-    def __len__(self):
-        return len(self.data)
+    return data
 
-    def __getitem__(self, idx):
-        return self.data[idx]
+
+def formatting_func(example, tokenizer):
+    """Format YOUR custom text field for training."""
+    return example["text"]
 
 
 def main():
@@ -80,7 +74,9 @@ def main():
     print(f"Input:      <init>...<User:>...</User:>")
     print(f"Output:     {{'message_type': 'tool_call', 'tool_call': {{...}}}}")
     print(f"Epochs:     {args.epochs}")
-    print(f"Batch:      {args.batch_size} × {args.gradient_accumulation}")
+    print(f"Batch:      {args.batch_size} x {args.gradient_accumulation}")
+    if args.max_samples:
+        print(f"Max samples: {args.max_samples:,}")
     print("=" * 70 + "\n")
 
     # GPU check
@@ -94,10 +90,10 @@ def main():
     # Load dataset
     if not Path(args.dataset).exists():
         print(f"ERROR: {args.dataset} not found")
-        print("Run: python generate_gemma_dataset.py --rows 50000")
+        print("Run: python generate_gemma_dataset.py --rows 50000 --output training_data.jsonl")
         sys.exit(1)
 
-    dataset = CSVDataset(args.dataset)
+    dataset = load_jsonl_dataset(args.dataset, args.max_samples)
     if not len(dataset):
         print("ERROR: Empty dataset")
         sys.exit(1)
@@ -160,19 +156,23 @@ def main():
         packing=True,
     )
 
-    # Trainer - YOUR format uses "text" column
+    # Formatting function — handles YOUR custom text field
+    def formatter(example):
+        return example["text"]
+
+    # Trainer — use formatting_func instead of dataset_text_field
     trainer = SFTTrainer(
         model=model,
         tokenizer=tokenizer,
         train_dataset=dataset,
-        dataset_text_field="text",
+        formatting_func=formatter,
         max_seq_length=args.max_seq_length,
         args=train_args,
     )
 
     steps = len(dataset) // (args.batch_size * args.gradient_accumulation)
     total_steps = steps * args.epochs
-    print(f"\nSteps: {steps}/epoch × {args.epochs} epochs = {total_steps:,}")
+    print(f"\nSteps: {steps}/epoch x {args.epochs} epochs = {total_steps:,}")
     print(f"Precision: {'BF16' if bf16 else 'FP16'}")
     print("\nStarting training...")
     print("-" * 70)

@@ -2,7 +2,7 @@
 
 > **Base Model**: Google Gemma 4 E4B (8B)
 > **Training Platform**: RunPod (Unsloth + LoRA)
-> **Format**: JSONL with `messages` array (HuggingFace/Unsloth standard)
+> **Format**: JSONL with custom XML prompt + JSON tool call response (YOUR custom format)
 
 ---
 
