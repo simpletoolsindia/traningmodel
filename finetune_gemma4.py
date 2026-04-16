@@ -5,8 +5,7 @@ Fine-tune Gemma 4 E4B — YOUR Custom Format
 Train using YOUR custom XML prompt + JSON tool call response format.
 
 Dataset: training_data.jsonl (from generate_gemma_dataset.py)
-Input:   <init>...<User:>task</User:>
-Output:  {"message_type": "tool_call", "tool_call": {...}}
+Format:  [{"role": "user", "content": "..."}, {"role": "assistant", "content": "..."}]
 
 Usage:
     python finetune_gemma4.py --dataset training_data.jsonl --epochs 3
@@ -33,34 +32,31 @@ def parse_args():
     p.add_argument("--lora-alpha", type=int, default=64)
     p.add_argument("--output-dir", default="./gemma4-custom-agent")
     p.add_argument("--max-samples", type=int, default=None,
-                    help="Limit dataset size for quick testing")
+                   help="Limit dataset size for quick testing")
     return p.parse_args()
 
 
 def load_jsonl_dataset(path, max_samples=None):
-    """Load YOUR custom format JSONL dataset."""
-    data = []
-    print(f"Loading YOUR custom format dataset: {path}")
+    """Load chat-formatted JSONL dataset with user/assistant message roles.
 
+    Each line: {"text": [{"role": "user", "content": "..."}, {"role": "assistant", "content": "..."}]}
+    This format fixes "Helper model mapping missing user/assistant" warning.
+    """
+    data = []
+    print(f"Loading chat-formatted JSONL dataset: {path}")
     with open(path, "r", encoding="utf-8") as f:
         for i, line in enumerate(f):
             if max_samples and i >= max_samples:
                 break
-            row = json.loads(line)
-            if "text" in row:
-                data.append(row)
-
+            line = line.strip()
+            if not line:
+                continue
+            obj = json.loads(line)
+            messages = obj.get("text", [])
+            if len(messages) >= 2:
+                data.append({"messages": messages})
     print(f"  Loaded {len(data):,} examples")
-    if data:
-        avg = sum(len(d["text"]) for d in data) / len(data)
-        print(f"  Avg length: ~{avg:.0f} chars (~{int(avg * 0.25)} tokens)")
-
     return data
-
-
-def formatting_func(example, tokenizer):
-    """Format YOUR custom text field for training."""
-    return example["text"]
 
 
 def main():
@@ -71,8 +67,7 @@ def main():
     print("=" * 70)
     print(f"Model:      {args.model}")
     print(f"Dataset:    {args.dataset}")
-    print(f"Input:      <init>...<User:>...</User:>")
-    print(f"Output:     {{'message_type': 'tool_call', 'tool_call': {{...}}}}")
+    print(f"Format:     Chat messages with user/assistant roles")
     print(f"Epochs:     {args.epochs}")
     print(f"Batch:      {args.batch_size} x {args.gradient_accumulation}")
     if args.max_samples:
@@ -84,10 +79,20 @@ def main():
     if not torch.cuda.is_available():
         print("ERROR: GPU required")
         sys.exit(1)
-
     print(f"GPU: {torch.cuda.get_device_name(0)}")
 
-    # Load dataset
+    # Load model first (tokenizer needed for dataset avg length calc)
+    from unsloth import FastLanguageModel
+    print("Loading model...")
+
+    model, tokenizer = FastLanguageModel.from_pretrained(
+        model_name=args.model,
+        max_seq_length=args.max_seq_length,
+        dtype=None,
+        load_in_4bit=True,
+    )
+
+    # Load dataset AFTER tokenizer is ready
     if not Path(args.dataset).exists():
         print(f"ERROR: {args.dataset} not found")
         print("Run: python generate_gemma_dataset.py --rows 50000 --output training_data.jsonl")
@@ -98,22 +103,20 @@ def main():
         print("ERROR: Empty dataset")
         sys.exit(1)
 
+    # Calculate avg length using tokenizer
+    avg_len = sum(
+        len(tokenizer.apply_chat_template(
+            [m["content"] for m in d["messages"]],
+            tokenize=True, add_generation_prompt=False
+        )) for d in dataset
+    ) / len(dataset)
+    print(f"  Avg token length: ~{avg_len:.0f}")
+
     os.makedirs(args.output_dir, exist_ok=True)
 
     # Save config
     with open(f"{args.output_dir}/training_config.json", "w") as f:
         json.dump(vars(args), f, indent=2, default=str)
-
-    # Load model
-    from unsloth import FastLanguageModel
-    print("\nLoading model...")
-
-    model, tokenizer = FastLanguageModel.from_pretrained(
-        model_name=args.model,
-        max_seq_length=args.max_seq_length,
-        dtype=None,
-        load_in_4bit=True,
-    )
 
     # Apply LoRA
     print("Applying LoRA...")
@@ -156,16 +159,12 @@ def main():
         packing=True,
     )
 
-    # Formatting function — handles YOUR custom text field
-    def formatter(example):
-        return example["text"]
-
-    # Trainer — use formatting_func instead of dataset_text_field
+    # Trainer — uses "messages" field for chat-formatted data
     trainer = SFTTrainer(
         model=model,
         tokenizer=tokenizer,
         train_dataset=dataset,
-        formatting_func=formatter,
+        dataset_text_field="messages",
         max_seq_length=args.max_seq_length,
         args=train_args,
     )

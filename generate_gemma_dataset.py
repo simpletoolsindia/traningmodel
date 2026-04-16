@@ -484,10 +484,16 @@ def generate_row(row_id):
     # YOUR custom output format
     output_json = json.dumps(response, ensure_ascii=False)
 
+    # Format as proper chat messages (fixes "Helper model mapping missing user/assistant" warning)
     return {
         "id": str(row_id),
         "prompt": prompt,
         "output_json": output_json,
+        # Chat-formatted for Unsloth (fixes "Helper model mapping missing user/assistant" warning)
+        "text": [
+            {"role": "user", "content": prompt},
+            {"role": "assistant", "content": output_json}
+        ],
         "language": language,
         "framework": framework,
         "message_type": message_type,
@@ -512,16 +518,16 @@ def generate_dataset(num_rows, output_file):
 
     print(f"Generating {num_rows:,} rows in YOUR custom format...")
     print(f"Output: {output_file}")
-    print(f"Format: JSONL (for Unsloth)")
+    print(f"Format: JSONL with chat-formatted 'text' field")
     print()
 
     start_time = time.time()
     with open(output_file, "w", encoding="utf-8") as f:
         for i in range(num_rows):
             row = generate_row(i + 1)
-            # For Unsloth: combine prompt + output into single text field
-            text = f"{row['prompt']}\n\n{row['output_json']}"
-            out_row = {"text": text}
+            # For Unsloth: use chat-formatted "text" field (list of role messages)
+            # This fixes "Helper model mapping missing user/assistant" warning
+            out_row = {"text": row["text"]}
             f.write(json.dumps(out_row, ensure_ascii=False) + "\n")
 
             if (i + 1) % 100_000 == 0:
